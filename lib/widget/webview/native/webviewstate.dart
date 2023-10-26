@@ -14,20 +14,9 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 // Import for iOS features.
 import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
-class ControllerImpl extends ViewController {
-  WebViewController? controller;
-  ControllerImpl([this.controller]);
-  @override
-  void loadUrl(String url) {
-    controller!.loadRequest(Uri.parse(url));
-  }
-}
-
-class WebViewState extends WidgetState<EnsembleWebView> {
+class WebViewState extends WidgetState<EnsembleWebView> with CookieMethods {
   // WebView won't render on Android if height is 0 initially
   double? calculatedHeight = 1;
-  late ControllerImpl _controller;
-  UniqueKey key = UniqueKey();
   Set<Factory<OneSequenceGestureRecognizer>> gestureRecognizers = {};
   NavigationDelegate initNavigationDelegate() {
     return NavigationDelegate(
@@ -44,13 +33,14 @@ class WebViewState extends WidgetState<EnsembleWebView> {
         }
       },
       onPageFinished: (String url) async {
-        calculatedHeight = await _controller.controller!
+        calculatedHeight = await widget.controller.webViewController!
             .runJavaScriptReturningResult(
                 "document.documentElement.scrollHeight;") as double;
         setState(() {
           widget.controller.loadingPercent = 100;
         });
         if (widget.controller.onPageFinished != null) {
+          if (!mounted) return;
           ScreenController().executeAction(
               context, widget.controller.onPageFinished!,
               event: EnsembleEvent(widget, data: {'url': url}));
@@ -86,33 +76,63 @@ class WebViewState extends WidgetState<EnsembleWebView> {
     );
   }
 
+  Stream<dynamic> onSetCookie() async* {
+    var cookieList = widget.controller.cookies;
+    for (var i in cookieList) {
+      yield widget.controller.cookieManager!.setCookie(WebViewCookie(
+          name: i['name'],
+          value: i["value"],
+          domain: i["domain"],
+          path: i['path']));
+    }
+  }
+
   void initController() {
-    _controller = ControllerImpl();
-    widget.controller.webViewController = _controller;
-    PlatformWebViewControllerCreationParams params;
+    PlatformWebViewControllerCreationParams params =
+        const PlatformWebViewControllerCreationParams();
+    PlatformWebViewCookieManagerCreationParams cookieParams =
+        const PlatformWebViewCookieManagerCreationParams();
     if (WebViewPlatform.instance is WebKitWebViewPlatform) {
+      cookieParams = WebKitWebViewCookieManagerCreationParams
+          .fromPlatformWebViewCookieManagerCreationParams(
+        cookieParams,
+      );
       params = WebKitWebViewControllerCreationParams(
         allowsInlineMediaPlayback: true,
         mediaTypesRequiringUserAction: const <PlaybackMediaTypes>{},
       );
-    } else {
-      params = const PlatformWebViewControllerCreationParams();
+    } else if (WebViewPlatform.instance is AndroidWebViewPlatform) {
+      cookieParams = AndroidWebViewCookieManagerCreationParams
+          .fromPlatformWebViewCookieManagerCreationParams(
+        cookieParams,
+      );
+      params = AndroidWebViewControllerCreationParams
+          .fromPlatformWebViewControllerCreationParams(
+        params,
+      );
     }
-    // #docregion webview_controller
-    _controller.controller =
+
+    // #docregion
+
+    widget.controller.webViewController =
         WebViewController.fromPlatformCreationParams(params)
+          ..loadRequest(Uri.parse(widget.controller.url!))
           ..setBackgroundColor(Colors.transparent)
           ..setJavaScriptMode(JavaScriptMode.unrestricted)
           ..setNavigationDelegate(initNavigationDelegate());
-    if (widget.controller.url != null) {
-      _controller.controller!.loadRequest(Uri.parse(widget.controller.url!));
-    }
-    if (_controller.controller!.platform is AndroidWebViewController) {
+    widget.controller.cookieManager =
+        WebViewCookieManager.fromPlatformCreationParams(cookieParams);
+    if (widget.controller.webViewController!.platform
+        is AndroidWebViewController) {
       AndroidWebViewController.enableDebugging(true);
-      (_controller.controller!.platform as AndroidWebViewController)
+      (widget.controller.webViewController!.platform
+              as AndroidWebViewController)
           .setMediaPlaybackRequiresUserGesture(false);
     }
     // #enddocregion webview_controller
+
+    widget.controller.cookieManager =
+        WebViewCookieManager.fromPlatformCreationParams(cookieParams);
   }
 
   @override
@@ -127,8 +147,19 @@ class WebViewState extends WidgetState<EnsembleWebView> {
         widget.controller.height != null) {
       gestureRecognizers = {Factory(() => EagerGestureRecognizer())};
     }
-
     super.initState();
+  }
+
+  @override
+  void didChangeDependencies() {
+    widget.controller.cookieMethods = this;
+    super.didChangeDependencies();
+  }
+
+  @override
+  void didUpdateWidget(covariant EnsembleWebView oldWidget) {
+    widget.controller.cookieMethods = this;
+    super.didUpdateWidget(oldWidget);
   }
 
   @override
@@ -138,28 +169,36 @@ class WebViewState extends WidgetState<EnsembleWebView> {
         height: widget.controller.height ?? calculatedHeight,
         width: widget.controller.width,
         child: WebViewWidget(
-            key: key,
-            controller: _controller.controller!,
+            controller: widget.controller.webViewController!,
             gestureRecognizers: gestureRecognizers));
 
-    return Stack(
-      alignment: Alignment.topLeft,
-      children: [
-        webView,
-        // loading indicator
-        Visibility(
-            visible: widget.controller.loadingPercent! > 0 &&
-                widget.controller.loadingPercent! < 100 &&
-                widget.controller.error == null,
-            child: LinearProgressIndicator(
-                minHeight: 3,
-                value: widget.controller.loadingPercent! / 100.0)),
-        // error panel
-        Visibility(
-          visible: widget.controller.error != null,
-          child: Center(child: Text(widget.controller.error ?? '')),
-        ),
-      ],
-    );
+    return StreamBuilder(
+        stream: onSetCookie(),
+        builder: (context, snapshot) {
+          return Stack(
+            alignment: Alignment.topLeft,
+            children: [
+              webView,
+              // loading indicator
+              Visibility(
+                  visible: widget.controller.loadingPercent! > 0 &&
+                      widget.controller.loadingPercent! < 100 &&
+                      widget.controller.error == null,
+                  child: LinearProgressIndicator(
+                      minHeight: 3,
+                      value: widget.controller.loadingPercent! / 100.0)),
+              // error panel
+              Visibility(
+                visible: widget.controller.error != null,
+                child: Center(child: Text(widget.controller.error ?? '')),
+              ),
+            ],
+          );
+        });
+  }
+
+  @override
+  void clearCookie() async {
+    await widget.controller.cookieManager!.clearCookies();
   }
 }
