@@ -7,7 +7,6 @@ import 'package:ensemble/widget/webview/webview.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher_string.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 // Import for Android features.
 import 'package:webview_flutter_android/webview_flutter_android.dart';
@@ -33,9 +32,13 @@ class WebViewState extends WidgetState<EnsembleWebView> with CookieMethods {
         }
       },
       onPageFinished: (String url) async {
-        calculatedHeight = await widget.controller.webViewController!
+        num scrollHeight = await widget.controller.webViewController!
             .runJavaScriptReturningResult(
-                "document.documentElement.scrollHeight;") as double;
+                "document.documentElement.scrollHeight;") as num;
+        calculatedHeight = double.parse("$scrollHeight");
+        final String cookies = await widget.controller.webViewController!
+            .runJavaScriptReturningResult("document.cookie") as String;
+        log("cookies: $cookies");
         setState(() {
           widget.controller.loadingPercent = 100;
         });
@@ -78,12 +81,12 @@ class WebViewState extends WidgetState<EnsembleWebView> with CookieMethods {
 
   Stream<dynamic> onSetCookie() async* {
     var cookieList = widget.controller.cookies;
-    for (var i in cookieList) {
+    for (var cookies in cookieList) {
       yield widget.controller.cookieManager!.setCookie(WebViewCookie(
-          name: i['name'],
-          value: i["value"],
-          domain: i["domain"],
-          path: i['path']));
+          name: cookies['name'],
+          value: cookies["value"],
+          domain: cookies["domain"],
+          path: cookies['path']));
     }
   }
 
