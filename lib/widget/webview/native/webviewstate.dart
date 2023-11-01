@@ -1,5 +1,3 @@
-import 'dart:developer';
-
 import 'package:ensemble/framework/event.dart';
 import 'package:ensemble/framework/widget/widget.dart';
 import 'package:ensemble/screen_controller.dart';
@@ -15,6 +13,7 @@ import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
 
 class WebViewState extends WidgetState<EnsembleWebView> with CookieMethods {
   // WebView won't render on Android if height is 0 initially
+  bool isCookieLoaded = false;
   double? calculatedHeight = 1;
   Set<Factory<OneSequenceGestureRecognizer>> gestureRecognizers = {};
   NavigationDelegate initNavigationDelegate() {
@@ -32,13 +31,10 @@ class WebViewState extends WidgetState<EnsembleWebView> with CookieMethods {
         }
       },
       onPageFinished: (String url) async {
-        num scrollHeight = await widget.controller.webViewController!
+        dynamic scrollHeight = await widget.controller.webViewController!
             .runJavaScriptReturningResult(
-                "document.documentElement.scrollHeight;") as num;
+                "document.documentElement.scrollHeight;");
         calculatedHeight = double.parse("$scrollHeight");
-        final String cookies = await widget.controller.webViewController!
-            .runJavaScriptReturningResult("document.cookie") as String;
-        log("cookies: $cookies");
         setState(() {
           widget.controller.loadingPercent = 100;
         });
@@ -79,10 +75,10 @@ class WebViewState extends WidgetState<EnsembleWebView> with CookieMethods {
     );
   }
 
-  Stream<dynamic> onSetCookie() async* {
+  Future<dynamic> setCookie() async {
     var cookieList = widget.controller.cookies;
     for (var cookies in cookieList) {
-      yield widget.controller.cookieManager!.setCookie(WebViewCookie(
+      await widget.controller.cookieManager!.setCookie(WebViewCookie(
           name: cookies['name'],
           value: cookies["value"],
           domain: cookies["domain"],
@@ -133,9 +129,6 @@ class WebViewState extends WidgetState<EnsembleWebView> with CookieMethods {
           .setMediaPlaybackRequiresUserGesture(false);
     }
     // #enddocregion webview_controller
-
-    widget.controller.cookieManager =
-        WebViewCookieManager.fromPlatformCreationParams(cookieParams);
   }
 
   @override
@@ -168,36 +161,44 @@ class WebViewState extends WidgetState<EnsembleWebView> with CookieMethods {
   @override
   Widget buildWidget(BuildContext context) {
     // WebView's height will be the same as the HTML height
-    Widget webView = SizedBox(
+
+    Widget webViewWidget = SizedBox(
         height: widget.controller.height ?? calculatedHeight,
         width: widget.controller.width,
         child: WebViewWidget(
             controller: widget.controller.webViewController!,
             gestureRecognizers: gestureRecognizers));
 
-    return StreamBuilder(
-        stream: onSetCookie(),
+    Widget webView = FutureBuilder(
+        future: setCookie(),
         builder: (context, snapshot) {
-          return Stack(
-            alignment: Alignment.topLeft,
-            children: [
-              webView,
-              // loading indicator
-              Visibility(
-                  visible: widget.controller.loadingPercent! > 0 &&
-                      widget.controller.loadingPercent! < 100 &&
-                      widget.controller.error == null,
-                  child: LinearProgressIndicator(
-                      minHeight: 3,
-                      value: widget.controller.loadingPercent! / 100.0)),
-              // error panel
-              Visibility(
-                visible: widget.controller.error != null,
-                child: Center(child: Text(widget.controller.error ?? '')),
-              ),
-            ],
-          );
+          if (snapshot.connectionState == ConnectionState.done &&
+              !isCookieLoaded) {
+            widget.controller.webViewController!.reload();
+            isCookieLoaded = true;
+          }
+          return webViewWidget;
         });
+
+    return Stack(
+      alignment: Alignment.topLeft,
+      children: [
+        webView,
+        // loading indicator
+        Visibility(
+            visible: widget.controller.loadingPercent! > 0 &&
+                widget.controller.loadingPercent! < 100 &&
+                widget.controller.error == null,
+            child: LinearProgressIndicator(
+                minHeight: 3,
+                value: widget.controller.loadingPercent! / 100.0)),
+        // error panel
+        Visibility(
+          visible: widget.controller.error != null,
+          child: Center(child: Text(widget.controller.error ?? '')),
+        ),
+      ],
+    );
   }
 
   @override
